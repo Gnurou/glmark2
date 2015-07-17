@@ -37,7 +37,8 @@ class NativeStateDRM : public NativeState
 {
 public:
     NativeStateDRM() :
-        fd_(0),
+        drm_fd_(0),
+        gbm_fd_(0),
         resources_(0),
         connector_(0),
         encoder_(0),
@@ -76,7 +77,8 @@ private:
     bool init();
     void cleanup();
 
-    int fd_;
+    int drm_fd_;
+    int gbm_fd_;
     drmModeRes* resources_;
     drmModeConnector* connector_;
     drmModeEncoder* encoder_;

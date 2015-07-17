@@ -25,6 +25,8 @@
 #include "native-state-drm.h"
 #include "log.h"
 
+#include <unistd.h>
+
 /******************
  * Public methods *
  ******************/
@@ -83,7 +85,7 @@ NativeStateDRM::flip()
     unsigned int waiting(1);
 
     if (!crtc_set_) {
-        int status = drmModeSetCrtc(fd_, encoder_->crtc_id, fb_->fb_id, 0, 0,
+        int status = drmModeSetCrtc(drm_fd_, encoder_->crtc_id, fb_->fb_id, 0, 0,
                                     &connector_->connector_id, 1, mode_);
         if (status >= 0) {
             crtc_set_ = true;
@@ -95,7 +97,7 @@ NativeStateDRM::flip()
         return;
     }
 
-    int status = drmModePageFlip(fd_, encoder_->crtc_id, fb_->fb_id,
+    int status = drmModePageFlip(drm_fd_, encoder_->crtc_id, fb_->fb_id,
                                  DRM_MODE_PAGE_FLIP_EVENT, &waiting);
     if (status < 0) {
         Log::error("Failed to enqueue page flip: %d\n", status);
@@ -104,13 +106,13 @@ NativeStateDRM::flip()
 
     fd_set fds;
     FD_ZERO(&fds);
-    FD_SET(fd_, &fds);
+    FD_SET(drm_fd_, &fds);
     drmEventContext evCtx;
     evCtx.version = DRM_EVENT_CONTEXT_VERSION;
     evCtx.page_flip_handler = page_flip_handler;
 
     while (waiting) {
-        status = select(fd_ + 1, &fds, 0, 0, 0);
+        status = select(drm_fd_ + 1, &fds, 0, 0, 0);
         if (status < 0) {
             // Most of the time, select() will return an error because the
             // user pressed Ctrl-C.  So, only print out a message in debug
@@ -123,7 +125,7 @@ NativeStateDRM::flip()
             }
             return;
         }
-        drmHandleEvent(fd_, &evCtx);
+        drmHandleEvent(drm_fd_, &evCtx);
     }
 
     gbm_surface_release_buffer(surface_, bo_);
@@ -159,14 +161,35 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
     unsigned int stride = gbm_bo_get_stride(bo);
     unsigned int handle = gbm_bo_get_handle(bo).u32;
     unsigned int fb_id(0);
-    int status = drmModeAddFB(fd_, width, height, 24, 32, stride, handle, &fb_id);
+
+    if (drm_fd_ != gbm_fd_) {
+        int fd;
+
+        int status = drmPrimeHandleToFD(gbm_fd_, handle, 0, &fd);
+        if (status)  {
+            Log::error("Failed to export bo\n");
+            return 0;
+        }
+
+        status = drmPrimeFDToHandle(drm_fd_, fd, &handle);
+        if (status)  {
+            Log::error("Failed to import bo\n");
+            close(fd);
+            return 0;
+        }
+
+        close(fd);
+        Log::debug("Successfully imported PRIME buffer\n");
+    }
+
+    int status = drmModeAddFB(drm_fd_, width, height, 24, 32, stride, handle, &fb_id);
     if (status < 0) {
         Log::error("Failed to create FB: %d\n", status);
         return 0;
     }
 
     fb = new DRMFBState();
-    fb->fd = fd_;
+    fb->fd = drm_fd_;
     fb->bo = bo;
     fb->fb_id = fb_id;
 
@@ -177,10 +200,38 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
 bool
 NativeStateDRM::init_gbm()
 {
-    dev_ = gbm_create_device(fd_);
+    // Try to use the same device as a render device
+    gbm_fd_ = drm_fd_;
+    dev_ = gbm_create_device(gbm_fd_);
     if (!dev_) {
-        Log::error("Failed to create GBM device\n");
-        return false;
+        Log::debug("DRM device cannot be used for rendering, trying to open another one...\n");
+        // TODO: Replace this with something that explicitly probes for the loaded
+        // driver (udev?).
+        static const char* drm_modules[] = {
+            "i915",
+            "nouveau",
+            "radeon",
+            "vmgfx",
+            "omapdrm",
+            "exynos"
+        };
+
+        unsigned int num_modules(sizeof(drm_modules)/sizeof(drm_modules[0]));
+        for (unsigned int m = 0; m < num_modules; m++) {
+            gbm_fd_ = drmOpenWithType(drm_modules[m], 0, DRM_NODE_RENDER);
+            if (gbm_fd_ < 0) {
+                Log::debug("Failed to open GBM module '%s'\n", drm_modules[m]);
+                continue;
+            }
+            Log::debug("Opened GBM module '%s'\n", drm_modules[m]);
+            break;
+        }
+
+        dev_ = gbm_create_device(gbm_fd_);
+        if (!dev_) {
+            Log::error("Failed to create GBM device\n");
+            return false;
+        }
     }
 
     surface_ = gbm_surface_create(dev_, mode_->hdisplay, mode_->vdisplay,
@@ -210,8 +261,8 @@ NativeStateDRM::init()
 
     unsigned int num_modules(sizeof(drm_modules)/sizeof(drm_modules[0]));
     for (unsigned int m = 0; m < num_modules; m++) {
-        fd_ = drmOpen(drm_modules[m], 0);
-        if (fd_ < 0) {
+        drm_fd_ = drmOpen(drm_modules[m], 0);
+        if (drm_fd_ < 0) {
             Log::debug("Failed to open DRM module '%s'\n", drm_modules[m]);
             continue;
         }
@@ -219,12 +270,12 @@ NativeStateDRM::init()
         break;
     }
 
-    if (fd_ < 0) {
+    if (drm_fd_ < 0) {
         Log::error("Failed to find a suitable DRM device\n");
         return false;
     }
 
-    resources_ = drmModeGetResources(fd_);
+    resources_ = drmModeGetResources(drm_fd_);
     if (!resources_) {
         Log::error("drmModeGetResources failed\n");
         return false;
@@ -232,7 +283,7 @@ NativeStateDRM::init()
 
     // Find a connected connector
     for (int c = 0; c < resources_->count_connectors; c++) {
-        connector_ = drmModeGetConnector(fd_, resources_->connectors[c]);
+        connector_ = drmModeGetConnector(drm_fd_, resources_->connectors[c]);
         if (DRM_MODE_CONNECTED == connector_->connection) {
             break;
         }
@@ -263,7 +314,7 @@ NativeStateDRM::init()
 
     // Find a suitable encoder
     for (int e = 0; e < resources_->count_encoders; e++) {
-        encoder_ = drmModeGetEncoder(fd_, resources_->encoders[e]);
+        encoder_ = drmModeGetEncoder(drm_fd_, resources_->encoders[e]);
         if (encoder_ && encoder_->encoder_id == connector_->encoder_id) {
             break;
         }
@@ -280,7 +331,7 @@ NativeStateDRM::init()
         return false;
     }
 
-    crtc_ = drmModeGetCrtc(fd_, encoder_->crtc_id);
+    crtc_ = drmModeGetCrtc(drm_fd_, encoder_->crtc_id);
     if (!crtc_) {
         Log::error("Failed to get current CRTC\n");
         return false;
@@ -311,7 +362,7 @@ NativeStateDRM::cleanup()
 {
     // Restore CRTC state if necessary
     if (crtc_) {
-        int status = drmModeSetCrtc(fd_, crtc_->crtc_id, crtc_->buffer_id,
+        int status = drmModeSetCrtc(drm_fd_, crtc_->crtc_id, crtc_->buffer_id,
                                     crtc_->x, crtc_->y, &connector_->connector_id,
                                     1, &crtc_->mode);
         if (status < 0) {
@@ -340,9 +391,13 @@ NativeStateDRM::cleanup()
         drmModeFreeResources(resources_);
         resources_ = 0;
     }
-    if (fd_ > 0) {
-        drmClose(fd_);
+    if (gbm_fd_ > 0 && gbm_fd_ != drm_fd_) {
+        drmClose(gbm_fd_);
     }
-    fd_ = 0;
+    gbm_fd_ = 0;
+    if (drm_fd_ > 0) {
+        drmClose(drm_fd_);
+    }
+    drm_fd_ = 0;
     mode_ = 0;
 }
