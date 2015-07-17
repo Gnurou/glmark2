@@ -27,6 +27,8 @@
 
 #include <unistd.h>
 
+#include <tegra_drm.h>
+
 /******************
  * Public methods *
  ******************/
@@ -179,6 +181,20 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
         }
 
         close(fd);
+
+        struct drm_tegra_gem_set_tiling args;
+        memset(&args, 0, sizeof(args));
+
+        args.handle = handle;
+        args.mode = DRM_TEGRA_GEM_TILING_MODE_BLOCK;
+        args.value = 4;
+
+        status = drmIoctl(drm_fd_, DRM_IOCTL_TEGRA_GEM_SET_TILING, &args);
+        if (status < 0) {
+            Log::error("Failed to set tiling parameters\n");
+            return 0;
+        }
+
         Log::info("Successfully imported PRIME buffer\n");
     }
 
@@ -251,6 +267,7 @@ NativeStateDRM::init()
     // TODO: Replace this with something that explicitly probes for the loaded
     // driver (udev?).
     static const char* drm_modules[] = {
+        "tegra",
         "i915",
         "nouveau",
         "radeon",
