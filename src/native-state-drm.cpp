@@ -158,20 +158,22 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
 
     unsigned int width = gbm_bo_get_width(bo);
     unsigned int height = gbm_bo_get_height(bo);
-    unsigned int stride = gbm_bo_get_stride(bo);
-    unsigned int handle = gbm_bo_get_handle(bo).u32;
+    uint32_t handles[4] = { gbm_bo_get_handle(bo).u32 };
+    uint32_t pitches[4] = { gbm_bo_get_stride(bo) };
+    uint32_t offsets[4] = { 0 };
+    uint64_t modifier[4] = { 0 };
     unsigned int fb_id(0);
 
     if (drm_fd_ != gbm_fd_) {
         int fd;
 
-        int status = drmPrimeHandleToFD(gbm_fd_, handle, 0, &fd);
+        int status = drmPrimeHandleToFD(gbm_fd_, handles[0], 0, &fd);
         if (status)  {
             Log::error("Failed to export bo\n");
             return 0;
         }
 
-        status = drmPrimeFDToHandle(drm_fd_, fd, &handle);
+        status = drmPrimeFDToHandle(drm_fd_, fd, &handles[0]);
         if (status)  {
             Log::error("Failed to import bo\n");
             close(fd);
@@ -179,10 +181,11 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
         }
 
         close(fd);
+
         Log::debug("Successfully imported PRIME buffer\n");
     }
 
-    int status = drmModeAddFB(drm_fd_, width, height, 24, 32, stride, handle, &fb_id);
+    int status = drmModeAddFB2WithModifiers(drm_fd_, width, height, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifier, &fb_id, 0);
     if (status < 0) {
         Log::error("Failed to create FB: %d\n", status);
         return 0;
