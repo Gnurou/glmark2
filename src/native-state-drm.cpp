@@ -22,6 +22,7 @@
  *  Jesse Barker
  *  Alexandros Frantzis
  */
+#include "canvas-generic.h"
 #include "native-state-drm.h"
 #include "log.h"
 
@@ -99,6 +100,7 @@ NativeStateDRM::flip()
         return;
     }
 
+    glFinish();
     int status = drmModePageFlip(drm_fd_, encoder_->crtc_id, fb_->fb_id,
                                  DRM_MODE_PAGE_FLIP_EVENT, &waiting);
     if (status < 0) {
