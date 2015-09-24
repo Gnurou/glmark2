@@ -22,6 +22,7 @@
  *  Jesse Barker
  *  Alexandros Frantzis
  */
+#include "canvas-generic.h"
 #include "native-state-drm.h"
 #include "log.h"
 
@@ -97,6 +98,7 @@ NativeStateDRM::flip()
         return;
     }
 
+    glFinish();
     int status = drmModePageFlip(drm_fd_, encoder_->crtc_id, fb_->fb_id,
                                  DRM_MODE_PAGE_FLIP_EVENT, &waiting);
     if (status < 0) {
@@ -205,7 +207,6 @@ NativeStateDRM::init_gbm()
 {
     // Try to use the same device as a render device
     gbm_fd_ = drm_fd_;
-    dev_ = gbm_create_device(gbm_fd_);
     if (!dev_) {
         Log::debug("DRM device cannot be used for rendering, trying to open another one...\n");
         // TODO: Replace this with something that explicitly probes for the loaded
@@ -213,6 +214,7 @@ NativeStateDRM::init_gbm()
         static const char* drm_modules[] = {
             "i915",
             "nouveau",
+            "tegra",
             "radeon",
             "vmgfx",
             "omapdrm",
