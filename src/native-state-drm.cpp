@@ -220,7 +220,7 @@ NativeStateDRM::init_gbm()
 {
     // Try to use the same device as a render device
     gbm_fd_ = drm_fd_;
-    dev_ = gbm_create_device(gbm_fd_);
+    dev_ = NULL;
     if (!dev_) {
         Log::debug("DRM device cannot be used for rendering, trying to open another one...\n");
         // TODO: Replace this with something that explicitly probes for the loaded
@@ -228,6 +228,7 @@ NativeStateDRM::init_gbm()
         static const char* drm_modules[] = {
             "i915",
             "nouveau",
+            "tegra",
             "radeon",
             "vmgfx",
             "omapdrm",
