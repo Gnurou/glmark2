@@ -161,7 +161,7 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
     uint32_t handles[4] = { gbm_bo_get_handle(bo).u32 };
     uint32_t pitches[4] = { gbm_bo_get_stride(bo) };
     uint32_t offsets[4] = { 0 };
-    uint64_t modifier[4] = { 0 };
+    uint64_t modifier[4] = { NV_FORMAT_MOD_TEGRA_BLOCK(4) };
     unsigned int fb_id(0);
 
     if (drm_fd_ != gbm_fd_) {
@@ -185,7 +185,7 @@ NativeStateDRM::fb_get_from_bo(gbm_bo* bo)
         Log::debug("Successfully imported PRIME buffer\n");
     }
 
-    int status = drmModeAddFB2WithModifiers(drm_fd_, width, height, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifier, &fb_id, 0);
+    int status = drmModeAddFB2WithModifiers(drm_fd_, width, height, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifier, &fb_id, DRM_MODE_FB_MODIFIERS);
     if (status < 0) {
         Log::error("Failed to create FB: %d\n", status);
         return 0;
@@ -254,6 +254,7 @@ NativeStateDRM::init()
     // TODO: Replace this with something that explicitly probes for the loaded
     // driver (udev?).
     static const char* drm_modules[] = {
+        "tegra",
         "i915",
         "nouveau",
         "radeon",
